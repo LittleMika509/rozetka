@@ -41,6 +41,9 @@ from urllib.error import HTTPError, URLError
 
 from bs4 import BeautifulSoup
 
+from sqlalchemy import create_engine, Column, Integer, String, Float
+from sqlalchemy.orm import declarative_base, sessionmaker
+
 CATALOG_URL = "https://rozetka.com.ua/ua/notebooks/c80004/"
 
 USER_AGENTS = [
@@ -62,6 +65,23 @@ HEADERS_BASE = {
 }
 
 PRICE_NUM_RE = re.compile(r"[\d\s]+")
+
+# setup Database
+
+engine = create_engine("sqlite:///notebooks.db")
+Base = declarative_base()
+Session = sessionmaker(bind=engine)
+session = Session()
+
+class Notebook(Base):
+    __tablename__ = "notebooks"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    link = Column(String, unique=True)
+    name = Column(String)
+    price = Column(Float)
+    price_discount = Column(Float)
+
+Base.metadata.create_all(engine)
 
 def rand_ua() -> str:
     return random.choice(USER_AGENTS)
@@ -274,9 +294,22 @@ def crawl(out_path: str,
             for item in products:
                 if item["link"] in seen_links:
                     continue
+                # in CSV
                 writer.writerow(item)
+
+                #in DB
+                notebook = Notebook(
+                    link=item["link"],
+                    name=item["name"],
+                    price=float(item["price"]) if item["price"] else None,
+                    price_discount=float(item["price_discount"]) if item["price_discount"] else None
+                )
+                session.add(notebook)
+
                 seen_links.add(item["link"])
                 added += 1
+            
+            session.commit()
 
             rows_written += added
             pages_done += 1

@@ -18,6 +18,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Скопіюємо код у контейнер
 COPY rozetka_notebooks_scraper.py .
 
+# Flask
+CMD ["python", "app.py"]
+
 # Команда за замовчуванням
 ENTRYPOINT ["python", "rozetka_notebooks_scraper.py"]
 # ENTRYPOINT - команда каже докеру, що те, що в дужках запускати всередині контейнера за замовчуванням, автоматично, без додаткових команд

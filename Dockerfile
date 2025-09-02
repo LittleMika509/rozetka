@@ -16,11 +16,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 #RUN запускає команду pip install - встановлює біблотеки, --no-cache-dir - не зберігати пакети в кеші, тимчасовій пам'яті, -r - requirements, посилає на файл
 
 # Скопіюємо код у контейнер
-COPY rozetka_notebooks_scraper.py .
+COPY . .
 
 # Flask
 CMD ["python", "app.py"]
 
 # Команда за замовчуванням
-ENTRYPOINT ["python", "rozetka_notebooks_scraper.py"]
+#ENTRYPOINT ["python", "rozetka_notebooks_scraper.py"]
 # ENTRYPOINT - команда каже докеру, що те, що в дужках запускати всередині контейнера за замовчуванням, автоматично, без додаткових команд

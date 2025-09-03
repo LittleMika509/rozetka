@@ -18,6 +18,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Скопіюємо код у контейнер
 COPY . .
 
+# Який порт слухає Flask в контейнері
+EXPOSE 5000
+
 # Flask
 CMD ["python", "app.py"]
 

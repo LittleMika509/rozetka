@@ -1,6 +1,6 @@
 from flask import Flask, jsonify
 from sqlalchemy import create_engine
-from sqlalchemy import Column, Integer, String
+from sqlalchemy import Column, Integer, String, Float
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 # setup db
@@ -13,9 +13,11 @@ SessionLocal = sessionmaker(bind=engine)
 class Notebook(Base):
 
     __tablename__ = "notebooks"
-    id = Column(Integer, primary_key=True, index=True)
-    title = Column(String, nullable=False)
-    price = Column(String, nullable=False)
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    link = Column(String, nullable=True)
+    name = Column(String, nullable=True)
+    price = Column(Float, nullable=True)
+    price_discount = Column(Float, nullable=True)
 
 Base.metadata.create_all(bind=engine)
 
@@ -24,14 +26,26 @@ app = Flask(__name__)
 
 @app.route("/")
 def hpme():
-    return {"message": "Rozetka Parser API is running!"}
+    return jsonify({"message": "Rozetka Parser API is running!"})
 
 @app.route("/notebooks")
 def get_notebooks():
     session = SessionLocal()
-    notebooks = session.query.all()
-    session.close()
-    return jsonify([{"id": n.id, "title": n.title, "price": n.price} for n in notebooks])
+    try:
+        notebooks = session.query(Notebook).all()
+        return jsonify([
+            {
+                "id": n.id,
+                "link": n.link,
+                "name": n.name,
+                "price": n.price,
+                "price_discount": n.price_discount
+            }
+            for n in notebooks
+        ])
+    finally:
+        session.close()
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)

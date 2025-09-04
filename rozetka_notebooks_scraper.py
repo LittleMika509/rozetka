@@ -10,8 +10,8 @@ Rozetka Notebooks Scraper
 - Використовую тільки стандартні модулі Python для мережі/IO/логіки.
 - Для HTML використовую одну зовнішню бібліотеку: beautifulsoup4 (bs4).
 
-Анти‑бот тактика:
-- Випадковий User‑Agent та затримки між запитами.
+Анти-бот тактика:
+- Випадковий User-Agent та затримки між запитами.
 - Повторні спроби із експоненційним backoff.
 - Опціональна ротація проксі (HTTP/HTTPS/SOCKS — якщо налаштовано системно).
 
@@ -26,6 +26,7 @@ Rozetka Notebooks Scraper
 Порада: якщо з'являються 429/403 — збільшіть затримки, зменшіть швидкість,
         або використайте проксі (див. --proxy-file).
 """
+import requests
 import csv
 import random
 import re
@@ -47,7 +48,6 @@ from sqlalchemy.orm import declarative_base, sessionmaker
 CATALOG_URL = "https://rozetka.com.ua/ua/notebooks/c80004/"
 
 USER_AGENTS = [
-    # A small rotating pool; feel free to extend
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3 Safari/605.1.15",
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
@@ -67,7 +67,6 @@ HEADERS_BASE = {
 PRICE_NUM_RE = re.compile(r"[\d\s]+")
 
 # setup Database
-
 engine = create_engine("sqlite:///notebooks.db")
 Base = declarative_base()
 Session = sessionmaker(bind=engine)
@@ -91,9 +90,6 @@ def smart_delay(min_delay: float, max_delay: float):
     time.sleep(delay)
 
 def with_query(url: str, **params) -> str:
-    """
-    Append or replace query params in URL.
-    """
     parts = list(urlparse(url))
     q = dict(parse_qsl(parts[4], keep_blank_values=True))
     q.update({k: v for k, v in params.items() if v is not None})
@@ -110,9 +106,6 @@ def make_opener(proxy: Optional[str] = None):
 
 def fetch(url: str, opener, timeout: float, max_retries: int, backoff_base: float,
           min_delay: float, max_delay: float) -> bytes:
-    """
-    Fetch with retries, UA rotation and polite delays.
-    """
     attempt = 0
     while True:
         smart_delay(min_delay, max_delay)
@@ -125,19 +118,16 @@ def fetch(url: str, opener, timeout: float, max_retries: int, backoff_base: floa
                     raise HTTPError(url, resp.status, "HTTP error", resp.headers, None)
                 return resp.read()
         except HTTPError as e:
-            # If 404 or no products => bubble up for graceful stop;
-            # If 429/403 — backoff harder
             if e.code in (404,):
                 raise
             attempt += 1
             if attempt > max_retries:
                 raise
             sleep_for = (backoff_base ** attempt) + random.uniform(0, 1.0)
-            # be extra gentle on 429/403
             if e.code in (429, 403):
                 sleep_for *= 2.5
             time.sleep(sleep_for)
-        except URLError as e:
+        except URLError:
             attempt += 1
             if attempt > max_retries:
                 raise
@@ -150,67 +140,36 @@ def extract_price(text: Optional[str]) -> Optional[int]:
     m = PRICE_NUM_RE.search(text)
     if not m:
         return None
-    # Remove spaces and convert to int
     try:
         return int(m.group(0).replace(" ", ""))
     except ValueError:
         return None
 
-def parse_products(html: bytes) -> List[Dict[str, Any]]:
-    soup = BeautifulSoup(html, "html.parser")
+# 👇 виправлений parse_products
+def parse_products(soup):
+    products = []
+    cards = soup.select(".goods-tile")
 
-    # Rozetka cards often have classes like 'goods-tile' or 'catalog-grid__cell'.
-    # We'll try a few selectors to be robust.
-    cards = soup.select(".goods-tile") or soup.select("[data-goods-id] .goods-tile") or []
-
-    results = []
     for card in cards:
-        # Title + link
-        a = card.select_one(".goods-tile__title a, a.goods-tile__heading, a.goods-tile__title")
-        if not a:
-            a = card.select_one("a.goods-tile__picture")
-        name = (a.get_text(strip=True) if a else None) or (card.get("data-name") if card else None)
-        link = (a.get("href") if a and a.has_attr("href") else None)
-        # Normalize absolute links if needed
-        if link and link.startswith("//"):
-            link = "https:" + link
+        title_tag = card.select_one(".goods-tile__heading")
+        price_tag = card.select_one(".goods-tile__price-value")
+        link_tag = card.select_one("a.goods-tile__heading")
 
-        # Current (actual/discounted) price
-        cur_price_el = (
-            card.select_one(".goods-tile__price-value") or
-            card.select_one(".goods-tile__price .price__digits") or
-            card.select_one("[data-testid='price']")
-        )
-        cur_price = extract_price(cur_price_el.get_text(strip=True) if cur_price_el else None)
+        if title_tag and price_tag:
+            title = title_tag.get_text(strip=True)
+            price = price_tag.get_text(strip=True).replace("\u202f", "")
+            link = link_tag["href"] if link_tag else None
 
-        # Old (pre-discount) price — a few class variants seen on Rozetka
-        old_price_el = (
-            card.select_one(".goods-tile__price--old .goods-tile__price-value") or
-            card.select_one(".goods-tile__old-price .goods-tile__price-value") or
-            card.select_one(".goods-tile__price_old .goods-tile__price-value") or
-            card.select_one(".goods-tile__price--old") or
-            card.select_one(".old-price")
-        )
-        old_price = extract_price(old_price_el.get_text(strip=True) if old_price_el else None)
-
-        # Map to requested columns:
-        #   price            — базова ціна (до знижки) якщо є, інакше поточна
-        #   price_discount   — ціна зі знижкою (поточна), якщо є знижка
-        price = old_price if old_price else cur_price
-        price_discount = cur_price if old_price else None
-
-        if link and name and (price or price_discount):
-            results.append({
+            products.append({
                 "link": link,
-                "name": name,
-                "price": price if price is not None else "",
-                "price_discount": price_discount if price_discount is not None else "",
+                "name": title,
+                "price": price,
+                "price_discount": None
             })
 
-    return results
+    return products
 
 def next_page_url(base_url: str, page: int) -> str:
-    # Rozetka розуміє ?page=N
     return with_query(base_url, page=page)
 
 def read_proxies(file_path: Optional[str]) -> List[str]:
@@ -250,12 +209,8 @@ def crawl(out_path: str,
           start_page: int,
           max_pages: Optional[int],
           proxy_file: Optional[str]) -> int:
-    """
-    Returns number of rows written.
-    """
     proxies = read_proxies(proxy_file)
     proxy_idx = 0
-
     rows_written = 0
     seen_links = set()
 
@@ -278,14 +233,17 @@ def crawl(out_path: str,
                 html = fetch(url, opener=opener, timeout=timeout, max_retries=max_retries,
                              backoff_base=backoff_base, min_delay=min_delay, max_delay=max_delay)
             except HTTPError as e:
-                # 404 or persistent error — stop
                 print(f"[INFO] Stopping at page {page}: HTTP {e.code}", file=sys.stderr)
                 break
             except URLError as e:
                 print(f"[WARN] Network error at page {page}: {e}", file=sys.stderr)
                 break
 
-            products = parse_products(html)
+            # 👇 головне виправлення
+            soup = BeautifulSoup(html, "html.parser")
+            
+            products = parse_products(soup)
+
             if not products:
                 print(f"[INFO] No products found on page {page}. Stopping.", file=sys.stderr)
                 break
@@ -294,10 +252,8 @@ def crawl(out_path: str,
             for item in products:
                 if item["link"] in seen_links:
                     continue
-                # in CSV
                 writer.writerow(item)
 
-                #in DB
                 notebook = Notebook(
                     link=item["link"],
                     name=item["name"],
@@ -308,13 +264,12 @@ def crawl(out_path: str,
 
                 seen_links.add(item["link"])
                 added += 1
-            
-            session.commit()
 
+            session.commit()
             rows_written += added
             pages_done += 1
             page += 1
-            proxy_idx += 1  # rotate proxy each page
+            proxy_idx += 1
 
             print(f"[OK] Page {page-1}: +{added} items (total {rows_written}).", file=sys.stderr)
 
@@ -330,10 +285,9 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     ap.add_argument("--backoff-base", type=float, default=1.8, help="Основа експоненційного backoff (default: 1.8)")
     ap.add_argument("--start-page", type=int, default=1, help="З якої сторінки починати (default: 1)")
     ap.add_argument("--max-pages", type=int, default=None, help="Максимальна кількість сторінок для обходу (default: всі)")
-    ap.add_argument("--proxy-file", type=str, default=None, help="Файл із списком проксі (.txt або .json), напр.: http://user:pass@host:port")
+    ap.add_argument("--proxy-file", type=str, default=None, help="Файл із списком проксі (.txt або .json)")
     args = ap.parse_args(argv)
 
-    # sanity
     if args.max_delay < args.min_delay:
         args.max_delay = args.min_delay
 

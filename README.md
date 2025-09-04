@@ -14,3 +14,12 @@
 
 ```bash
 docker build -t rozetka-scraper .
+
+# Запуск rozetka_notebooks_scraper.py
+docker run -it --rm -v "${PWD}:/app" rozetka-scraper `
+  python rozetka_notebooks_scraper.py --out /app/notebooks.csv --min-delay 2 --max-delay 5
+
+  #Запуск Flask API
+  docker run -it --rm -p 5000:5000 -v "${PWD}:/app" rozetka-scraper
+
+
